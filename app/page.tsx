@@ -17,7 +17,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { zipSync } from 'fflate';
+import { gunzipSync, zipSync } from 'fflate';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -27,7 +27,16 @@ import {
 } from '@/components/ui/native-select';
 import { Slider } from '@/components/ui/slider';
 
-type OutputFormat = 'image/jpeg' | 'image/png' | 'image/webp';
+type OutputFormat =
+  | 'image/jpeg'
+  | 'image/png'
+  | 'image/webp'
+  | 'image/avif'
+  | 'image/gif'
+  | 'image/bmp'
+  | 'image/tiff'
+  | 'image/x-icon'
+  | 'application/pdf';
 type JobStatus = 'ready' | 'working' | 'done' | 'error';
 
 type ConversionJob = {
@@ -45,7 +54,34 @@ const formats: Array<{ mime: OutputFormat; label: string; ext: string }> = [
   { mime: 'image/jpeg', label: 'JPEG', ext: 'jpg' },
   { mime: 'image/png', label: 'PNG', ext: 'png' },
   { mime: 'image/webp', label: 'WebP', ext: 'webp' },
+  { mime: 'image/avif', label: 'AVIF', ext: 'avif' },
+  { mime: 'image/gif', label: 'GIF (tek kare)', ext: 'gif' },
+  { mime: 'image/bmp', label: 'BMP', ext: 'bmp' },
+  { mime: 'image/tiff', label: 'TIFF', ext: 'tiff' },
+  { mime: 'image/x-icon', label: 'ICO', ext: 'ico' },
+  { mime: 'application/pdf', label: 'PDF', ext: 'pdf' },
 ];
+
+const acceptedExtensions = new Set([
+  'png',
+  'jpg',
+  'jpeg',
+  'webp',
+  'avif',
+  'gif',
+  'bmp',
+  'svg',
+  'svgz',
+  'heic',
+  'heif',
+  'tif',
+  'tiff',
+  'ico',
+]);
+
+function extensionOf(name: string) {
+  return name.split('.').pop()?.toLowerCase() ?? '';
+}
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -58,7 +94,29 @@ function outputName(name: string, mime: OutputFormat) {
   return `${base}.${formats.find((item) => item.mime === mime)?.ext ?? 'jpg'}`;
 }
 
-function loadImage(file: File) {
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob || blob.type !== type) {
+          reject(new Error('Bu hedef biçim tarayıcınızda desteklenmiyor.'));
+          return;
+        }
+        resolve(blob);
+      },
+      type,
+      quality,
+    );
+  });
+}
+
+function bytesToBlob(bytes: Uint8Array, type: string) {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return new Blob([buffer], { type });
+}
+
+function loadBrowserImage(file: File) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const image = new Image();
@@ -68,13 +126,211 @@ function loadImage(file: File) {
     };
     image.onerror = () => {
       URL.revokeObjectURL(url);
-      reject(new Error('Görsel açılamadı.'));
+      reject(new Error('Görsel tarayıcı tarafından açılamadı.'));
     };
     image.src = url;
   });
 }
 
-function convertFile(
+async function sanitizeSvg(file: File, compressed: boolean) {
+  const source = compressed
+    ? new TextDecoder().decode(gunzipSync(new Uint8Array(await file.arrayBuffer())))
+    : await file.text();
+  const documentNode = new DOMParser().parseFromString(source, 'image/svg+xml');
+  if (documentNode.querySelector('parsererror')) {
+    throw new Error('SVG dosyası okunamadı.');
+  }
+
+  documentNode.querySelectorAll('script, foreignObject, style').forEach((node) => node.remove());
+  documentNode.querySelectorAll('*').forEach((node) => {
+    for (const attribute of Array.from(node.attributes)) {
+      const name = attribute.name.toLowerCase();
+      const value = attribute.value.trim();
+      if (
+        name.startsWith('on') ||
+        (name === 'style' && /url\s*\(/i.test(value)) ||
+        (['href', 'xlink:href', 'src'].includes(name) &&
+          value !== '' &&
+          !value.startsWith('#') &&
+          !value.startsWith('data:image/'))
+      ) {
+        node.removeAttribute(attribute.name);
+      }
+    }
+  });
+
+  return new File(
+    [new XMLSerializer().serializeToString(documentNode)],
+    file.name.replace(/\.svgz$/i, '.svg'),
+    { type: 'image/svg+xml' },
+  );
+}
+
+async function decodeToCanvas(file: File) {
+  const extension = extensionOf(file.name);
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Tarayıcı görsel motorunu başlatamadı.');
+
+  if (extension === 'heic' || extension === 'heif') {
+    const { heicTo } = await import('heic-to/csp');
+    const bitmap = await heicTo({ blob: file, type: 'bitmap' });
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    context.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    return canvas;
+  }
+
+  if (extension === 'tif' || extension === 'tiff') {
+    const UTIF = (await import('utif')).default;
+    const buffer = await file.arrayBuffer();
+    const ifds = UTIF.decode(buffer);
+    if (!ifds.length) throw new Error('TIFF içinde görüntü bulunamadı.');
+    UTIF.decodeImage(buffer, ifds[0]);
+    const rgba = UTIF.toRGBA8(ifds[0]);
+    canvas.width = ifds[0].width;
+    canvas.height = ifds[0].height;
+    context.putImageData(
+      new ImageData(new Uint8ClampedArray(rgba), canvas.width, canvas.height),
+      0,
+      0,
+    );
+    return canvas;
+  }
+
+  try {
+    const browserFile =
+      extension === 'svg' || extension === 'svgz'
+        ? await sanitizeSvg(file, extension === 'svgz')
+        : file;
+    const image = await loadBrowserImage(browserFile);
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    context.drawImage(image, 0, 0);
+    return canvas;
+  } catch (error) {
+    if (extension !== 'avif') throw error;
+    const decodeAvif = (await import('@jsquash/avif/decode')).default;
+    const imageData = await decodeAvif(await file.arrayBuffer());
+    if (!imageData || imageData.data instanceof Uint16Array) {
+      throw new Error('Bu AVIF alt türü desteklenmiyor.');
+    }
+    canvas.width = imageData.width;
+    canvas.height = imageData.height;
+    context.putImageData(imageData, 0, 0);
+    return canvas;
+  }
+}
+
+function encodeBmp(imageData: ImageData) {
+  const { width, height, data } = imageData;
+  const offset = 54;
+  const bytes = new Uint8Array(offset + width * height * 4);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(0, 0x4d42, true);
+  view.setUint32(2, bytes.length, true);
+  view.setUint32(10, offset, true);
+  view.setUint32(14, 40, true);
+  view.setInt32(18, width, true);
+  view.setInt32(22, height, true);
+  view.setUint16(26, 1, true);
+  view.setUint16(28, 32, true);
+  view.setUint32(34, width * height * 4, true);
+
+  let targetIndex = offset;
+  for (let y = height - 1; y >= 0; y -= 1) {
+    for (let x = 0; x < width; x += 1) {
+      const sourceIndex = (y * width + x) * 4;
+      bytes[targetIndex++] = data[sourceIndex + 2];
+      bytes[targetIndex++] = data[sourceIndex + 1];
+      bytes[targetIndex++] = data[sourceIndex];
+      bytes[targetIndex++] = data[sourceIndex + 3];
+    }
+  }
+  return bytesToBlob(bytes, 'image/bmp');
+}
+
+async function encodeIco(canvas: HTMLCanvasElement) {
+  const png = new Uint8Array(await (await canvasToBlob(canvas, 'image/png')).arrayBuffer());
+  const bytes = new Uint8Array(22 + png.byteLength);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(0, 0, true);
+  view.setUint16(2, 1, true);
+  view.setUint16(4, 1, true);
+  bytes[6] = canvas.width >= 256 ? 0 : canvas.width;
+  bytes[7] = canvas.height >= 256 ? 0 : canvas.height;
+  view.setUint16(10, 1, true);
+  view.setUint16(12, 32, true);
+  view.setUint32(14, png.byteLength, true);
+  view.setUint32(18, 22, true);
+  bytes.set(png, 22);
+  return bytesToBlob(bytes, 'image/x-icon');
+}
+
+async function encodeCanvas(
+  canvas: HTMLCanvasElement,
+  target: OutputFormat,
+  quality: number,
+) {
+  if (target === 'image/jpeg' || target === 'image/png' || target === 'image/webp') {
+    return canvasToBlob(canvas, target, quality / 100);
+  }
+
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Çıktı pikselleri okunamadı.');
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+
+  if (target === 'image/avif') {
+    const encodeAvif = (await import('@jsquash/avif/encode')).default;
+    const buffer = await encodeAvif(imageData, { quality, speed: 6 });
+    return new Blob([buffer], { type: target });
+  }
+
+  if (target === 'image/gif') {
+    const { GIFEncoder, applyPalette, quantize } = await import('gifenc');
+    const palette = quantize(imageData.data, 256, {
+      format: 'rgba4444',
+      oneBitAlpha: true,
+    });
+    const index = applyPalette(imageData.data, palette, 'rgba4444');
+    const gif = GIFEncoder();
+    gif.writeFrame(index, canvas.width, canvas.height, {
+      palette,
+      transparent: true,
+    });
+    gif.finish();
+    return bytesToBlob(gif.bytes(), target);
+  }
+
+  if (target === 'image/bmp') return encodeBmp(imageData);
+
+  if (target === 'image/tiff') {
+    const UTIF = (await import('utif')).default;
+    const rgba = new Uint8Array(imageData.data.byteLength);
+    rgba.set(imageData.data);
+    return new Blob([UTIF.encodeImage(rgba.buffer, canvas.width, canvas.height)], {
+      type: target,
+    });
+  }
+
+  if (target === 'image/x-icon') return encodeIco(canvas);
+
+  const { PDFDocument } = await import('pdf-lib');
+  const png = await canvasToBlob(canvas, 'image/png');
+  const pdf = await PDFDocument.create();
+  const embedded = await pdf.embedPng(await png.arrayBuffer());
+  const page = pdf.addPage([canvas.width, canvas.height]);
+  page.drawImage(embedded, {
+    x: 0,
+    y: 0,
+    width: canvas.width,
+    height: canvas.height,
+  });
+  return bytesToBlob(await pdf.save(), 'application/pdf');
+}
+
+async function convertFile(
   file: File,
   target: OutputFormat,
   quality: number,
@@ -82,35 +338,30 @@ function convertFile(
   resizeEnabled: boolean,
   maxEdge: number,
 ) {
-  return loadImage(file).then(
-    (image) =>
-      new Promise<Blob>((resolve, reject) => {
-        const canvas = document.createElement('canvas');
-        const longestEdge = Math.max(image.naturalWidth, image.naturalHeight);
-        const scale = resizeEnabled && longestEdge > maxEdge ? maxEdge / longestEdge : 1;
-        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-        const context = canvas.getContext('2d');
-        if (!context) {
-          reject(new Error('Tarayıcı dönüştürme motorunu başlatamadı.'));
-          return;
-        }
+  const source = await decodeToCanvas(file);
+  const canvas = document.createElement('canvas');
+  const longestEdge = Math.max(source.width, source.height);
+  const requestedEdge =
+    target === 'image/x-icon'
+      ? resizeEnabled
+        ? Math.min(maxEdge, 256)
+        : 256
+      : maxEdge;
+  const shouldResize = (resizeEnabled || target === 'image/x-icon') && longestEdge > requestedEdge;
+  const scale = shouldResize ? requestedEdge / longestEdge : 1;
+  canvas.width = Math.max(1, Math.round(source.width * scale));
+  canvas.height = Math.max(1, Math.round(source.height * scale));
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Tarayıcı dönüştürme motorunu başlatamadı.');
 
-        if (target === 'image/jpeg') {
-          context.fillStyle = background;
-          context.fillRect(0, 0, canvas.width, canvas.height);
-        }
-        context.drawImage(image, 0, 0);
-        canvas.toBlob(
-          (blob) => {
-            if (blob) resolve(blob);
-            else reject(new Error('Bu hedef biçim tarayıcınızda desteklenmiyor.'));
-          },
-          target,
-          quality / 100,
-        );
-      }),
-  );
+  if (target === 'image/jpeg') {
+    context.fillStyle = background;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return encodeCanvas(canvas, target, quality);
 }
 
 export default function Home() {
@@ -122,6 +373,7 @@ export default function Home() {
   const [maxEdge, setMaxEdge] = useState(1920);
   const [dragging, setDragging] = useState(false);
   const [converting, setConverting] = useState(false);
+  const [fileNotice, setFileNotice] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -160,7 +412,10 @@ export default function Home() {
           inputSchema: {
             type: 'object',
             properties: {
-              target: { type: 'string', enum: ['jpeg', 'png', 'webp'] },
+              target: {
+                type: 'string',
+                enum: ['jpeg', 'png', 'webp', 'avif', 'gif', 'bmp', 'tiff', 'ico', 'pdf'],
+              },
               quality: { type: 'integer', minimum: 45, maximum: 100 },
               background: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' },
               resize: { type: 'boolean' },
@@ -174,9 +429,15 @@ export default function Home() {
               jpeg: 'image/jpeg',
               png: 'image/png',
               webp: 'image/webp',
+              avif: 'image/avif',
+              gif: 'image/gif',
+              bmp: 'image/bmp',
+              tiff: 'image/tiff',
+              ico: 'image/x-icon',
+              pdf: 'application/pdf',
             };
             if (input.target !== undefined && !(input.target in targetMap)) {
-              throw new Error('Hedef biçim jpeg, png veya webp olmalı.');
+              throw new Error('Geçerli bir hedef biçim seçilmeli.');
             }
             if (
               input.quality !== undefined &&
@@ -233,8 +494,15 @@ export default function Home() {
   );
 
   const addFiles = useCallback((incoming: FileList | File[]) => {
-    const valid = Array.from(incoming).filter((file) =>
-      ['image/png', 'image/jpeg', 'image/webp'].includes(file.type),
+    const incomingFiles = Array.from(incoming);
+    const valid = incomingFiles.filter((file) =>
+      acceptedExtensions.has(extensionOf(file.name)),
+    );
+    const rejected = incomingFiles.length - valid.length;
+    setFileNotice(
+      rejected
+        ? `${rejected} dosya desteklenen görsel biçimlerinden biri olmadığı için eklenmedi.`
+        : '',
     );
     setJobs((current) => [
       ...current,
@@ -383,7 +651,7 @@ export default function Home() {
               ref={inputRef}
               className="sr-only"
               type="file"
-              accept="image/png,image/jpeg,image/webp"
+              accept=".png,.jpg,.jpeg,.webp,.avif,.gif,.bmp,.svg,.svgz,.heic,.heif,.tif,.tiff,.ico"
               multiple
               onChange={(event) => {
                 if (event.target.files) addFiles(event.target.files);
@@ -399,13 +667,19 @@ export default function Home() {
                 <UploadCloud className="size-9" strokeWidth={2.2} />
               </span>
               <span className="text-2xl font-semibold tracking-[-0.025em] sm:text-3xl">Görsellerini buraya bırak</span>
-              <span className="mt-3 text-base text-muted-foreground">veya seçmek için tıkla · PNG, JPEG ve WebP</span>
+              <span className="mt-3 text-base text-muted-foreground">veya seçmek için tıkla · 10+ giriş biçimi</span>
             </button>
             <div className="drop-footer">
-              <span><Files className="size-4" /> Birden fazla dosya seçebilirsin</span>
-              <span><Zap className="size-4" /> Yükleme beklemeden dönüştür</span>
+              <span><Files className="size-4" /> PNG · JPEG · WebP · AVIF · GIF · BMP · SVG · HEIC · TIFF · ICO</span>
+              <span><Zap className="size-4" /> 9 çıktı biçimi</span>
             </div>
           </div>
+
+          {fileNotice && (
+            <p className="mt-3 text-sm font-medium text-destructive" role="status">
+              {fileNotice}
+            </p>
+          )}
 
           {jobs.length > 0 && (
             <section className="mt-8" aria-labelledby="files-title">
@@ -458,6 +732,9 @@ export default function Home() {
             <NativeSelect id="target-format" className="w-full" value={target} onChange={(event) => setTarget(event.target.value as OutputFormat)}>
               {formats.map((format) => <NativeSelectOption key={format.mime} value={format.mime}>{format.label}</NativeSelectOption>)}
             </NativeSelect>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              Hareketli görsellerin ilk karesi kullanılır. ICO çıktısı en fazla 256 px olur.
+            </p>
 
             <div className="resize-setting">
               <label className="flex cursor-pointer items-center gap-3">
@@ -492,7 +769,7 @@ export default function Home() {
               )}
             </div>
 
-            {target !== 'image/png' && (
+            {(['image/jpeg', 'image/webp', 'image/avif'] as OutputFormat[]).includes(target) && (
               <div className="mt-7">
                 <div className="mb-4 flex items-center justify-between"><span className="setting-label mb-0">Kalite</span><span className="quality-value">%{quality}</span></div>
                 <Slider aria-label="Çıktı kalitesi" min={45} max={100} value={[quality]} onValueChange={(value) => setQuality(Array.isArray(value) ? value[0] : value)} />
