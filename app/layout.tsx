@@ -8,9 +8,10 @@ const manrope = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: 'Biçim — Çok formatlı görsel dönüştürücü',
+  title: 'Biçim — Hızlı ve yerel format dönüştürücü',
   description:
-    'PNG, JPEG, WebP, AVIF, HEIC, TIFF, GIF, BMP, SVG ve ICO görsellerini cihazında dönüştür.',
+    'Görselleri, JSON, CSV, YAML, XML ve diğer dosya biçimlerini cihazında dönüştür.',
+  icons: { icon: '/favicon.svg' },
 };
 
 export default function RootLayout({

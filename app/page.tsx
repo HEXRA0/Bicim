@@ -26,6 +26,7 @@ import {
   NativeSelectOption,
 } from '@/components/ui/native-select';
 import { Slider } from '@/components/ui/slider';
+import { SiteHeader } from '@/components/site-header';
 
 type OutputFormat =
   | 'image/jpeg'
@@ -611,19 +612,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border bg-background/95">
-        <div className="mx-auto flex h-18 max-w-[1440px] items-center justify-between px-5 sm:px-8 lg:px-12">
-          <a href="#" className="flex items-center gap-3" aria-label="Biçim ana sayfa">
-            <span className="logo-mark" aria-hidden="true"><span>B</span></span>
-            <span className="text-xl font-bold tracking-[-0.025em]">biçim</span>
-          </a>
-          <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-            <LockKeyhole className="size-4 text-primary" />
-            <span className="hidden sm:inline">Dosyaların cihazından çıkmaz</span>
-            <span className="sm:hidden">Yerel işlem</span>
-          </div>
-        </div>
-      </header>
+      <SiteHeader current="images" />
 
       <section className="mx-auto grid max-w-[1440px] gap-8 px-5 py-8 sm:px-8 sm:py-12 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-12 lg:py-14">
         <div className="min-w-0">
