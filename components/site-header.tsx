@@ -1,7 +1,7 @@
-import { Braces, Images, LockKeyhole } from 'lucide-react';
+import { Archive, Braces, Images, LockKeyhole } from 'lucide-react';
 
 type SiteHeaderProps = {
-  current: 'images' | 'data';
+  current: 'images' | 'data' | 'archive';
 };
 
 export function SiteHeader({ current }: SiteHeaderProps) {
@@ -21,6 +21,9 @@ export function SiteHeader({ current }: SiteHeaderProps) {
           </a>
           <a className={`nav-pill ${current === 'data' ? 'active' : ''}`} href="/veri">
             <Braces /> Veri ve metin
+          </a>
+          <a className={`nav-pill ${current === 'archive' ? 'active' : ''}`} href="/arsiv">
+            <Archive /> Arşiv
           </a>
         </nav>
 
