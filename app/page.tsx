@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Archive,
   ArrowDown,
   Check,
   Download,
   FileImage,
   Files,
   LockKeyhole,
+  Maximize2,
   RefreshCw,
   Sparkles,
   Trash2,
@@ -15,7 +17,10 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import { zipSync } from 'fflate';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import {
   NativeSelect,
   NativeSelectOption,
@@ -30,6 +35,7 @@ type ConversionJob = {
   file: File;
   status: JobStatus;
   outputUrl?: string;
+  outputBlob?: Blob;
   outputSize?: number;
   outputName?: string;
   error?: string;
@@ -73,13 +79,17 @@ function convertFile(
   target: OutputFormat,
   quality: number,
   background: string,
+  resizeEnabled: boolean,
+  maxEdge: number,
 ) {
   return loadImage(file).then(
     (image) =>
       new Promise<Blob>((resolve, reject) => {
         const canvas = document.createElement('canvas');
-        canvas.width = image.naturalWidth;
-        canvas.height = image.naturalHeight;
+        const longestEdge = Math.max(image.naturalWidth, image.naturalHeight);
+        const scale = resizeEnabled && longestEdge > maxEdge ? maxEdge / longestEdge : 1;
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
         const context = canvas.getContext('2d');
         if (!context) {
           reject(new Error('Tarayıcı dönüştürme motorunu başlatamadı.'));
@@ -108,12 +118,20 @@ export default function Home() {
   const [target, setTarget] = useState<OutputFormat>('image/jpeg');
   const [quality, setQuality] = useState(88);
   const [background, setBackground] = useState('#ffffff');
+  const [resizeEnabled, setResizeEnabled] = useState(false);
+  const [maxEdge, setMaxEdge] = useState(1920);
   const [dragging, setDragging] = useState(false);
   const [converting, setConverting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    type ToolInput = { target?: string; quality?: number; background?: string };
+    type ToolInput = {
+      target?: string;
+      quality?: number;
+      background?: string;
+      resize?: boolean;
+      maxEdge?: number;
+    };
     type ModelContext = {
       registerTool: (
         tool: {
@@ -138,13 +156,15 @@ export default function Home() {
           name: 'configure_image_conversion',
           title: 'Görsel dönüşümünü ayarla',
           description:
-            'Biçim arayüzündeki hedef görsel biçimini, kaliteyi ve JPEG arka plan rengini ayarlar.',
+            'Biçim arayüzündeki hedef görsel biçimini, kaliteyi, JPEG arka plan rengini ve boyutlandırmayı ayarlar.',
           inputSchema: {
             type: 'object',
             properties: {
               target: { type: 'string', enum: ['jpeg', 'png', 'webp'] },
               quality: { type: 'integer', minimum: 45, maximum: 100 },
               background: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' },
+              resize: { type: 'boolean' },
+              maxEdge: { type: 'integer', minimum: 64, maximum: 12000 },
             },
             additionalProperties: false,
           },
@@ -170,17 +190,29 @@ export default function Home() {
             ) {
               throw new Error('Arka plan rengi #RRGGBB biçiminde olmalı.');
             }
+            if (
+              input.maxEdge !== undefined &&
+              (!Number.isInteger(input.maxEdge) || input.maxEdge < 64 || input.maxEdge > 12000)
+            ) {
+              throw new Error('En uzun kenar 64 ile 12000 piksel arasında olmalı.');
+            }
 
             const nextTarget = input.target ? targetMap[input.target] : target;
             const nextQuality = input.quality ?? quality;
             const nextBackground = input.background ?? background;
+            const nextResize = input.resize ?? resizeEnabled;
+            const nextMaxEdge = input.maxEdge ?? maxEdge;
             setTarget(nextTarget);
             setQuality(nextQuality);
             setBackground(nextBackground);
+            setResizeEnabled(nextResize);
+            setMaxEdge(nextMaxEdge);
             return {
               target: nextTarget.replace('image/', ''),
               quality: nextQuality,
               background: nextBackground,
+              resize: nextResize,
+              maxEdge: nextMaxEdge,
             };
           },
         },
@@ -189,9 +221,12 @@ export default function Home() {
     ).catch(() => undefined);
 
     return () => lifecycle.abort();
-  }, [background, quality, target]);
+  }, [background, maxEdge, quality, resizeEnabled, target]);
 
   const readyCount = jobs.filter((job) => job.status !== 'done').length;
+  const completedJobs = jobs.filter(
+    (job) => job.status === 'done' && job.outputBlob && job.outputName,
+  );
   const totalInput = useMemo(
     () => jobs.reduce((sum, job) => sum + job.file.size, 0),
     [jobs],
@@ -224,6 +259,35 @@ export default function Home() {
     setJobs([]);
   };
 
+  const downloadZip = async () => {
+    if (completedJobs.length < 2) return;
+    const files: Record<string, Uint8Array> = {};
+    const usedNames = new Set<string>();
+
+    for (const [index, job] of completedJobs.entries()) {
+      let name = job.outputName as string;
+      if (usedNames.has(name)) {
+        const dot = name.lastIndexOf('.');
+        name = `${name.slice(0, dot)}-${index + 1}${name.slice(dot)}`;
+      }
+      usedNames.add(name);
+      files[name] = new Uint8Array(await (job.outputBlob as Blob).arrayBuffer());
+    }
+
+    const zipped = zipSync(files, { level: 6 });
+    const archiveBuffer = new ArrayBuffer(zipped.byteLength);
+    new Uint8Array(archiveBuffer).set(zipped);
+    const archive = new Blob([archiveBuffer], {
+      type: 'application/zip',
+    });
+    const url = URL.createObjectURL(archive);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'bicim-dosyalari.zip';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  };
+
   const convertAll = async () => {
     if (!jobs.length || converting) return;
     setConverting(true);
@@ -235,7 +299,14 @@ export default function Home() {
         ),
       );
       try {
-        const blob = await convertFile(job.file, target, quality, background);
+        const blob = await convertFile(
+          job.file,
+          target,
+          quality,
+          background,
+          resizeEnabled,
+          maxEdge,
+        );
         const url = URL.createObjectURL(blob);
         setJobs((current) =>
           current.map((item) => {
@@ -245,6 +316,7 @@ export default function Home() {
               ...item,
               status: 'done',
               outputUrl: url,
+              outputBlob: blob,
               outputSize: blob.size,
               outputName: outputName(item.file.name, target),
             };
@@ -275,7 +347,7 @@ export default function Home() {
         <div className="mx-auto flex h-18 max-w-[1440px] items-center justify-between px-5 sm:px-8 lg:px-12">
           <a href="#" className="flex items-center gap-3" aria-label="Biçim ana sayfa">
             <span className="logo-mark" aria-hidden="true"><span>B</span></span>
-            <span className="text-xl font-extrabold tracking-[-0.04em]">biçim</span>
+            <span className="text-xl font-bold tracking-[-0.025em]">biçim</span>
           </a>
           <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
             <LockKeyhole className="size-4 text-primary" />
@@ -288,10 +360,10 @@ export default function Home() {
       <section className="mx-auto grid max-w-[1440px] gap-8 px-5 py-8 sm:px-8 sm:py-12 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-12 lg:py-14">
         <div className="min-w-0">
           <div className="mb-8 max-w-3xl">
-            <div className="mb-4 flex items-center gap-2 text-sm font-bold uppercase tracking-[0.16em] text-primary">
+            <div className="mb-4 flex items-center gap-2 text-sm font-semibold tracking-[0.03em] text-primary">
               <Sparkles className="size-4" /> Hızlı görsel dönüştürücü
             </div>
-            <h1 className="text-[clamp(2.6rem,6vw,5.8rem)] font-black leading-[0.9] tracking-[-0.075em]">
+            <h1 className="text-[clamp(2.5rem,5.2vw,4.9rem)] font-bold leading-[1.01] tracking-[-0.05em]">
               Dosyanın biçimi<br /><span className="text-primary">sana uysun.</span>
             </h1>
           </div>
@@ -326,7 +398,7 @@ export default function Home() {
               <span className="mb-7 grid size-20 place-items-center rounded-[1.6rem] bg-primary text-primary-foreground shadow-[0_12px_30px_oklch(0.55_0.24_260/24%)]">
                 <UploadCloud className="size-9" strokeWidth={2.2} />
               </span>
-              <span className="text-2xl font-extrabold tracking-[-0.035em] sm:text-3xl">Görsellerini buraya bırak</span>
+              <span className="text-2xl font-semibold tracking-[-0.025em] sm:text-3xl">Görsellerini buraya bırak</span>
               <span className="mt-3 text-base text-muted-foreground">veya seçmek için tıkla · PNG, JPEG ve WebP</span>
             </button>
             <div className="drop-footer">
@@ -338,8 +410,13 @@ export default function Home() {
           {jobs.length > 0 && (
             <section className="mt-8" aria-labelledby="files-title">
               <div className="mb-4 flex items-end justify-between gap-4">
-                <div><p className="eyebrow">Dönüşüm sırası</p><h2 id="files-title" className="mt-1 text-2xl font-extrabold tracking-tight">{jobs.length} dosya</h2></div>
-                <Button variant="ghost" onClick={clearJobs} disabled={converting}><Trash2 /> Tümünü temizle</Button>
+                <div><p className="eyebrow">Dönüşüm sırası</p><h2 id="files-title" className="mt-1 text-2xl font-semibold tracking-tight">{jobs.length} dosya</h2></div>
+                <div className="flex gap-2">
+                  {completedJobs.length > 1 && (
+                    <Button variant="outline" onClick={downloadZip}><Archive /> ZIP indir</Button>
+                  )}
+                  <Button variant="ghost" onClick={clearJobs} disabled={converting}><Trash2 /> <span className="hidden sm:inline">Tümünü temizle</span></Button>
+                </div>
               </div>
               <div className="overflow-hidden rounded-2xl border border-border bg-card">
                 {jobs.map((job) => (
@@ -373,7 +450,7 @@ export default function Home() {
         <aside className="lg:sticky lg:top-8 lg:self-start" aria-label="Dönüşüm ayarları">
           <div className="settings-card">
             <div className="mb-7 flex items-center justify-between">
-              <div><p className="eyebrow">Çıktı ayarları</p><h2 className="mt-1 text-2xl font-extrabold tracking-tight">Nasıl olsun?</h2></div>
+              <div><p className="eyebrow">Çıktı ayarları</p><h2 className="mt-1 text-2xl font-semibold tracking-tight">Nasıl olsun?</h2></div>
               <span className="step-badge">01</span>
             </div>
 
@@ -381,6 +458,39 @@ export default function Home() {
             <NativeSelect id="target-format" className="w-full" value={target} onChange={(event) => setTarget(event.target.value as OutputFormat)}>
               {formats.map((format) => <NativeSelectOption key={format.mime} value={format.mime}>{format.label}</NativeSelectOption>)}
             </NativeSelect>
+
+            <div className="resize-setting">
+              <label className="flex cursor-pointer items-center gap-3">
+                <Checkbox
+                  checked={resizeEnabled}
+                  onCheckedChange={setResizeEnabled}
+                  aria-label="Görseli boyutlandır"
+                />
+                <span className="flex items-center gap-2 font-semibold">
+                  <Maximize2 className="size-4 text-primary" /> Boyutlandır
+                </span>
+              </label>
+              {resizeEnabled && (
+                <div className="mt-4">
+                  <label className="setting-label" htmlFor="max-edge">En uzun kenar</label>
+                  <div className="relative">
+                    <Input
+                      id="max-edge"
+                      type="number"
+                      min={64}
+                      max={12000}
+                      value={maxEdge}
+                      onChange={(event) =>
+                        setMaxEdge(Math.min(12000, Math.max(64, Number(event.target.value) || 64)))
+                      }
+                      className="h-11 pr-12"
+                    />
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">px</span>
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-muted-foreground">Oran korunur; küçük görseller büyütülmez.</p>
+                </div>
+              )}
+            </div>
 
             {target !== 'image/png' && (
               <div className="mt-7">
@@ -402,7 +512,7 @@ export default function Home() {
 
             <div className="my-8 flex items-center gap-3 text-sm text-muted-foreground"><span className="h-px flex-1 bg-border" /><ArrowDown className="size-4" /><span className="h-px flex-1 bg-border" /></div>
 
-            <Button className="h-14 w-full rounded-xl text-base font-bold shadow-[0_12px_24px_oklch(0.55_0.24_260/22%)]" onClick={convertAll} disabled={!jobs.length || converting}>
+            <Button className="h-14 w-full rounded-xl text-base font-semibold shadow-[0_12px_24px_oklch(0.55_0.24_260/22%)]" onClick={convertAll} disabled={!jobs.length || converting}>
               {converting ? <RefreshCw className="animate-spin" /> : <Zap />}
               {converting ? 'Dönüştürülüyor…' : `${readyCount || jobs.length} dosyayı ${targetLabel} yap`}
             </Button>
