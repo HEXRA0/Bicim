@@ -1,8 +1,8 @@
 /* oxlint-disable next/no-html-link-for-pages, next/no-img-element -- Vinext navigation and the SVG brand mark use native elements. */
-import { Archive, Braces, FileText, Images, LockKeyhole } from 'lucide-react';
+import { Archive, Braces, Captions, FileText, Images, LockKeyhole } from 'lucide-react';
 
 type SiteHeaderProps = {
-  current: 'images' | 'data' | 'archive' | 'pdf';
+  current: 'images' | 'data' | 'archive' | 'pdf' | 'subtitle';
 };
 
 export function SiteHeader({ current }: SiteHeaderProps) {
@@ -28,6 +28,9 @@ export function SiteHeader({ current }: SiteHeaderProps) {
           </a>
           <a className={`nav-pill ${current === 'pdf' ? 'active' : ''}`} href="/pdf">
             <FileText /> PDF
+          </a>
+          <a className={`nav-pill ${current === 'subtitle' ? 'active' : ''}`} href="/altyazi">
+            <Captions /> Altyazı
           </a>
         </nav>
 
