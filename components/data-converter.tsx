@@ -3,6 +3,8 @@
 import { useMemo, useRef, useState } from 'react';
 import { Braces, Check, Download, FileCode2, LockKeyhole, RefreshCw, UploadCloud, WandSparkles, X } from 'lucide-react';
 import Papa from 'papaparse';
+import { decode as parseIni, encode as stringifyIni } from 'ini';
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { SiteHeader } from '@/components/site-header';
 import { Button } from '@/components/ui/button';
@@ -10,8 +12,10 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
-type DataFormat = 'json' | 'jsonl' | 'csv' | 'tsv' | 'yaml' | 'xml';
+type DataFormat = 'json' | 'jsonl' | 'csv' | 'tsv' | 'yaml' | 'toml' | 'ini' | 'xml';
 type Row = Record<string, unknown>;
+
+const MAX_DATA_BYTES = 10 * 1024 * 1024;
 
 const formatOptions: Array<{ value: DataFormat; label: string; extensions: string[] }> = [
   { value: 'json', label: 'JSON', extensions: ['json'] },
@@ -19,6 +23,8 @@ const formatOptions: Array<{ value: DataFormat; label: string; extensions: strin
   { value: 'csv', label: 'CSV', extensions: ['csv'] },
   { value: 'tsv', label: 'TSV', extensions: ['tsv', 'tab'] },
   { value: 'yaml', label: 'YAML', extensions: ['yaml', 'yml'] },
+  { value: 'toml', label: 'TOML', extensions: ['toml'] },
+  { value: 'ini', label: 'INI / CFG', extensions: ['ini', 'cfg', 'conf'] },
   { value: 'xml', label: 'XML', extensions: ['xml'] },
 ];
 
@@ -83,6 +89,16 @@ function parseSource(source: string, format: DataFormat): Row[] {
       });
   }
   if (format === 'yaml') return toRows(parseYaml(source));
+  if (format === 'toml') return toRows(parseToml(source));
+  if (format === 'ini') {
+    const parsed = parseIni(source) as Record<string, unknown>;
+    const sections = Object.entries(parsed).filter(([, value]) => value !== null && typeof value === 'object' && !Array.isArray(value));
+    const general = Object.fromEntries(Object.entries(parsed).filter(([, value]) => value === null || typeof value !== 'object'));
+    return [
+      ...(Object.keys(general).length ? [{ bolum: 'genel', ...general }] : []),
+      ...sections.map(([name, value]) => ({ bolum: name, ...(value as Row) })),
+    ];
+  }
   if (format === 'xml') return parseXml(source);
 
   const parsed = Papa.parse<Row>(source, {
@@ -115,6 +131,18 @@ function serializeRows(rows: Row[], format: DataFormat) {
   if (format === 'json') return JSON.stringify(rows, null, 2);
   if (format === 'jsonl') return rows.map((row) => JSON.stringify(row)).join('\n');
   if (format === 'yaml') return stringifyYaml(rows, { indent: 2 });
+  if (format === 'toml') {
+    return stringifyToml(rows.length === 1 ? rows[0] : { kayitlar: rows });
+  }
+  if (format === 'ini') {
+    const sections = Object.fromEntries(
+      rows.map((row, index) => {
+        const name = typeof row.bolum === 'string' && row.bolum.trim() ? row.bolum : `kayit_${index + 1}`;
+        return [name, Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'bolum').map(([key, value]) => [key, scalar(value)]))];
+      }),
+    );
+    return stringifyIni(sections, { whitespace: true });
+  }
   if (format === 'csv' || format === 'tsv') {
     return Papa.unparse(
       rows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, scalar(value)]))),
@@ -157,6 +185,10 @@ export function DataConverter() {
     const detected = detectFormat(file.name);
     if (!detected) {
       setError('Bu dosya biçimi veri dönüştürücüde desteklenmiyor.');
+      return;
+    }
+    if (file.size > MAX_DATA_BYTES) {
+      setError('Veri dosyası 10 MB sınırını aşıyor.');
       return;
     }
     setSourceFormat(detected);
@@ -223,12 +255,12 @@ export function DataConverter() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
               <div className="flex items-center gap-3">
                 <span className="file-icon"><FileCode2 /></span>
-                <div><p className="font-semibold">{fileName || 'Dosya seç veya metin yapıştır'}</p><p className="text-sm text-muted-foreground">JSON · JSONL · CSV · TSV · YAML · XML</p></div>
+                <div><p className="font-semibold">{fileName || 'Dosya seç veya metin yapıştır'}</p><p className="text-sm text-muted-foreground">JSON · JSONL · CSV · TSV · YAML · TOML · INI · XML</p></div>
               </div>
               <div className="flex gap-2">
                 {source && <Button variant="ghost" size="icon" aria-label="Veriyi temizle" onClick={clear}><X /></Button>}
                 <Button variant="outline" onClick={() => inputRef.current?.click()}><UploadCloud /> Dosya seç</Button>
-                <input ref={inputRef} className="sr-only" type="file" accept=".json,.jsonl,.ndjson,.csv,.tsv,.tab,.yaml,.yml,.xml" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFile(file); event.target.value = ''; }} />
+                <input ref={inputRef} className="sr-only" type="file" accept=".json,.jsonl,.ndjson,.csv,.tsv,.tab,.yaml,.yml,.toml,.ini,.cfg,.conf,.xml" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFile(file); event.target.value = ''; }} />
               </div>
             </div>
 
@@ -261,7 +293,7 @@ export function DataConverter() {
               {working ? <RefreshCw className="animate-spin" /> : <WandSparkles />}{working ? 'Dönüştürülüyor…' : 'Dönüştür'}
             </Button>
             {result && <Button variant="outline" className="mt-3 h-12 w-full" onClick={download}><Download /> Sonucu indir</Button>}
-            <div className="mt-5 flex items-start gap-3 rounded-xl bg-secondary p-4 text-sm leading-relaxed text-secondary-foreground"><LockKeyhole className="mt-0.5 size-4 shrink-0 text-primary" /><p>Metin ve dosyalar bu cihazda işlenir.</p></div>
+            <div className="mt-5 flex items-start gap-3 rounded-xl bg-secondary p-4 text-sm leading-relaxed text-secondary-foreground"><LockKeyhole className="mt-0.5 size-4 shrink-0 text-primary" /><p>Metin ve dosyalar bu cihazda işlenir. Dosya sınırı 10 MB.</p></div>
             {rows.length > 0 && <div className="mt-4 flex items-center gap-2 text-sm font-semibold text-primary"><Check className="size-4" /> {rows.length} kayıt hazır</div>}
           </aside>
         </div>

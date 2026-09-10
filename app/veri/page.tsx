@@ -3,7 +3,7 @@ import { DataConverter } from '@/components/data-converter';
 
 export const metadata: Metadata = {
   title: 'Veri ve metin dönüştürücü — Biçim',
-  description: 'JSON, JSONL, CSV, TSV, YAML ve XML dosyalarını cihazında dönüştür.',
+  description: 'JSON, JSONL, CSV, TSV, YAML, TOML, INI ve XML dosyalarını cihazında dönüştür.',
 };
 
 export default function DataPage() {
