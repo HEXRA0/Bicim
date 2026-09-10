@@ -1,8 +1,8 @@
 /* oxlint-disable next/no-html-link-for-pages -- Vinext navigation requires native document links here. */
-import { Binary, Database } from 'lucide-react';
+import { Binary, Boxes, Database } from 'lucide-react';
 
 type DataSectionNavProps = {
-  current: 'data' | 'text';
+  current: 'data' | 'text' | 'binary';
 };
 
 export function DataSectionNav({ current }: DataSectionNavProps) {
@@ -13,6 +13,9 @@ export function DataSectionNav({ current }: DataSectionNavProps) {
       </a>
       <a className={`nav-pill ${current === 'text' ? 'active' : ''}`} href="/metin">
         <Binary /> Metin ve kodlama
+      </a>
+      <a className={`nav-pill ${current === 'binary' ? 'active' : ''}`} href="/ikili-veri">
+        <Boxes /> İkili veri
       </a>
     </nav>
   );
