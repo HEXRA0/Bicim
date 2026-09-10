@@ -1,3 +1,4 @@
+/* oxlint-disable next/no-html-link-for-pages, next/no-img-element -- Vinext navigation and the SVG brand mark use native elements. */
 import { Archive, Braces, Images, LockKeyhole } from 'lucide-react';
 
 type SiteHeaderProps = {

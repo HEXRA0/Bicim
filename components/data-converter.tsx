@@ -7,6 +7,7 @@ import { decode as parseIni, encode as stringifyIni } from 'ini';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { SiteHeader } from '@/components/site-header';
+import { DataSectionNav } from '@/components/data-section-nav';
 import { Button } from '@/components/ui/button';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
@@ -241,6 +242,7 @@ export function DataConverter() {
     <main className="min-h-screen bg-background text-foreground">
       <SiteHeader current="data" />
       <section className="mx-auto max-w-[1440px] px-5 py-8 sm:px-8 sm:py-12 lg:px-12">
+        <DataSectionNav current="data" />
         <div className="mb-8 max-w-3xl">
           <div className="mb-4 flex items-center gap-2 text-sm font-semibold tracking-[0.03em] text-primary">
             <Braces className="size-4" /> Veri ve metin dönüştürücü
