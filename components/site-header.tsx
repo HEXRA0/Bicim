@@ -1,8 +1,8 @@
 /* oxlint-disable next/no-html-link-for-pages, next/no-img-element -- Vinext navigation and the SVG brand mark use native elements. */
-import { Archive, Braces, Images, LockKeyhole } from 'lucide-react';
+import { Archive, Braces, FileText, Images, LockKeyhole } from 'lucide-react';
 
 type SiteHeaderProps = {
-  current: 'images' | 'data' | 'archive';
+  current: 'images' | 'data' | 'archive' | 'pdf';
 };
 
 export function SiteHeader({ current }: SiteHeaderProps) {
@@ -16,7 +16,7 @@ export function SiteHeader({ current }: SiteHeaderProps) {
           <span className="text-xl font-bold tracking-[-0.025em]">biçim</span>
         </a>
 
-        <nav className="order-3 flex w-full items-center gap-1 rounded-xl bg-secondary p-1 sm:order-none sm:w-auto" aria-label="Dönüştürücü türü">
+        <nav className="order-3 flex w-full items-center gap-1 overflow-x-auto rounded-xl bg-secondary p-1 sm:order-none sm:w-auto" aria-label="Dönüştürücü türü">
           <a className={`nav-pill ${current === 'images' ? 'active' : ''}`} href="/">
             <Images /> Görsel
           </a>
@@ -25,6 +25,9 @@ export function SiteHeader({ current }: SiteHeaderProps) {
           </a>
           <a className={`nav-pill ${current === 'archive' ? 'active' : ''}`} href="/arsiv">
             <Archive /> Arşiv
+          </a>
+          <a className={`nav-pill ${current === 'pdf' ? 'active' : ''}`} href="/pdf">
+            <FileText /> PDF
           </a>
         </nav>
 

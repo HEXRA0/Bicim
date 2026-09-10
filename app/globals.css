@@ -104,7 +104,7 @@ body {
 .nav-pill {
   display: inline-flex;
   min-height: 2.2rem;
-  flex: 1;
+  flex: none;
   align-items: center;
   justify-content: center;
   gap: 0.45rem;

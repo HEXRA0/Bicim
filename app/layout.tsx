@@ -10,7 +10,7 @@ const manrope = Manrope({
 export const metadata: Metadata = {
   title: 'Biçim — Hızlı ve yerel format dönüştürücü',
   description:
-    'Görselleri, veri dosyalarını ve arşivleri cihazında dönüştür.',
+    'Görselleri, veri dosyalarını, arşivleri ve PDF belgelerini cihazında dönüştür.',
   icons: { icon: '/favicon.svg' },
 };
 
